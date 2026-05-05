@@ -218,108 +218,61 @@ def get_iv_analysis(ticker: str):
 
 #route to determine if its worth it to enter the trade, or if its not
 @app.get("/contract-quality/{ticker}")
-def get_contract_quality(ticker : str):
-    stock = yf.Ticker(ticker)
-    expiration_dates = stock.options
-    future_dates = [d for d in expiration_dates if d > (datetime.today() + timedelta(days=30)).strftime("%Y-%m-%d")]
-    expiry = future_dates[0]
-    chain = stock.option_chain(expiry)
+def get_contract_quality(ticker: str):
+    try:
+        stock = yf.Ticker(ticker)
+        expiration_dates = stock.options
+        future_dates = [d for d in expiration_dates if d > (datetime.today() + timedelta(days=30)).strftime("%Y-%m-%d")]
+        expiry = future_dates[0]
+        chain = stock.option_chain(expiry)
+        
+        calls = chain.calls.to_dict(orient="records")
+        puts = chain.puts.to_dict(orient="records")
 
-    calls = chain.calls.to_dict(orient="records")
-    puts = chain.puts.to_dict(orient="records")
-
-    # analyze contracts based on bid-ask spread, open interest, and volume
-    def analyze_contracts(contracts, contract_type):
-        results = []
-        for c in contracts:
-            bid = c.get("bid", 0)
-            ask = c.get("ask", 0)
-            spread = round(ask - bid, 2)
-            #spread formula; IMPORTANT REMEMBER FOR LATER
-            spread_pct = round((spread / ask * 100), 2) if ask > 0 else 0 
-
-            open_interest = c.get("openInterest", 0)
-            volume = c.get("volume", 0)
-
-            #GET THE QUALITY SCORE HERE 
-            if spread_pct < 5 and open_interest > 100:
-                quality = "high"
-            elif spread_pct < 15 and open_interest > 10:
-                quality = "medium"
-            else:
-                quality = "low"
-            
-            results.append({
-                "contract": c["contractSymbol"],
-                "type": contract_type,
-                "strike": c["strike"],
-                "bid": bid,
-                "ask": ask,
-                "spread": spread,
-                "spread_pct": spread_pct,
-                "open_interest": open_interest,
-                "volume": volume if volume else 0,
-                "liquidity_quality": quality
-            })
-        return results
-    
-    call_quality = analyze_contracts(calls, "call")
-    put_quality = analyze_contracts(puts, "put")
-    
-    return {
-        "ticker": ticker,
-        "expiration_date": expiry,
-        "calls": call_quality,
-        "puts": put_quality
-    }
-
-#route for multi tickers
-@app.get("/analyze/multiple/{tickers}")
-def analyze_multiple(tickers: str):
-    ticker_list = tickers.split(",")
-    results = {}
-    
-    for ticker in ticker_list:
-        try:
-            # for the stock price
-            api_key = os.getenv("POLYGON_API_KEY")
-            price_url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/prev?apiKey={api_key}"
-            price_response = requests.get(price_url)
-            price_data = price_response.json()
-            current_price = price_data["results"][0]["c"]
-
-            # get the options data
-            stock = yf.Ticker(ticker)
-            expiration_dates = stock.options
-            future_dates = [d for d in expiration_dates if d > (datetime.today() + timedelta(days=30)).strftime("%Y-%m-%d")]
-            expiry = future_dates[0]
-            chain = stock.option_chain(expiry)
-
-            # iv analysis
-            hist = stock.history(period="30d")
-            hist["returns"] = hist["Close"].pct_change()
-            hv = hist["returns"].std() * (252 ** 0.5)
-            avg_iv = chain.calls["impliedVolatility"].median()
-            iv_hv_ratio = round(float(avg_iv / hv), 2)
-
-            # put/call ratio
-            put_volume = chain.puts["volume"].sum()
-            call_volume = chain.calls["volume"].sum()
-            pcr = round(put_volume / call_volume, 2) if call_volume > 0 else 0
-
-            results[ticker] = {
-                "current_price": current_price,
-                "expiration_date": expiry,
-                "avg_iv": round(float(avg_iv), 4),
-                "historical_volatility": round(float(hv), 4),
-                "iv_hv_ratio": iv_hv_ratio,
-                "put_call_ratio": float(pcr),
-                "sentiment": "bearish" if pcr > 1 else "bullish"
-            }
-        except Exception as e:
-            results[ticker] = {"error": str(e)}
-    
-    return results
+        import pandas as pd
+        
+        def analyze_contracts(contracts, contract_type):
+            results = []
+            for c in contracts:
+                bid = c.get("bid", 0)
+                ask = c.get("ask", 0)
+                spread = round(ask - bid, 2)
+                spread_pct = round((spread / ask * 100), 2) if ask > 0 else 0
+                open_interest = c.get("openInterest", 0)
+                volume = c.get("volume", 0)
+                
+                if spread_pct < 5 and open_interest > 100:
+                    quality = "high"
+                elif spread_pct < 15 and open_interest > 10:
+                    quality = "medium"
+                else:
+                    quality = "low"
+                
+                results.append({
+                    "contract": c["contractSymbol"],
+                    "type": contract_type,
+                    "strike": c["strike"],
+                    "bid": bid,
+                    "ask": ask,
+                    "spread": spread,
+                    "spread_pct": spread_pct,
+                    "open_interest": int(open_interest) if open_interest and not (isinstance(open_interest, float) and open_interest != open_interest) else 0,
+                    "volume": int(volume) if volume and not (isinstance(volume, float) and volume != volume) else 0,
+                    "liquidity_quality": quality
+                })
+            return results
+        
+        call_quality = analyze_contracts(calls, "call")
+        put_quality = analyze_contracts(puts, "put")
+        
+        return {
+            "ticker": ticker,
+            "expiration_date": expiry,
+            "calls": call_quality,
+            "puts": put_quality
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 #route for scanner to display top 20 stocks
@@ -418,3 +371,47 @@ def opportunity_scanner():
         "total_opportunities": len(opportunities),
         "top_opportunities": opportunities[:10]
     }
+
+
+@app.get("/multi/{tickers}")
+def analyze_multiple(tickers: str):
+    ticker_list = tickers.split(",")
+    results = {}
+    
+    for ticker in ticker_list:
+        try:
+            api_key = os.getenv("POLYGON_API_KEY")
+            price_url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/prev?apiKey={api_key}"
+            price_response = requests.get(price_url)
+            price_data = price_response.json()
+            current_price = price_data["results"][0]["c"]
+
+            stock = yf.Ticker(ticker)
+            expiration_dates = stock.options
+            future_dates = [d for d in expiration_dates if d > (datetime.today() + timedelta(days=30)).strftime("%Y-%m-%d")]
+            expiry = future_dates[0]
+            chain = stock.option_chain(expiry)
+
+            hist = stock.history(period="30d")
+            hist["returns"] = hist["Close"].pct_change()
+            hv = hist["returns"].std() * (252 ** 0.5)
+            avg_iv = chain.calls["impliedVolatility"].median()
+            iv_hv_ratio = round(float(avg_iv / hv), 2)
+
+            put_volume = chain.puts["volume"].sum()
+            call_volume = chain.calls["volume"].sum()
+            pcr = round(put_volume / call_volume, 2) if call_volume > 0 else 0
+
+            results[ticker] = {
+                "current_price": current_price,
+                "expiration_date": expiry,
+                "avg_iv": round(float(avg_iv), 4),
+                "historical_volatility": round(float(hv), 4),
+                "iv_hv_ratio": iv_hv_ratio,
+                "put_call_ratio": float(pcr),
+                "sentiment": "bearish" if pcr > 1 else "bullish"
+            }
+        except Exception as e:
+            results[ticker] = {"error": str(e)}
+    
+    return results

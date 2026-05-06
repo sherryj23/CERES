@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "validators": {
+    "guardrails/provenance_embeddings": {
+      "import_path": "guardrails_grhub_provenance_embeddings",
+      "exports": [
+        "ProvenanceEmbeddings"
+      ],
+      "installed_at": "2026-05-06T15:41:23.485465+00:00",
+      "package_name": "guardrails-grhub-provenance-embeddings"
+    }
+  }
+}

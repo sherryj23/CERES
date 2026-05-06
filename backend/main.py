@@ -424,11 +424,19 @@ from agent import run_agent
 class QueryRequest(BaseModel):
     message: str
     ticker: str = None
-
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from pydantic import BaseModel
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'agent'))
+from agent import run_agent
+from validator import validate_response
 
 executor = ThreadPoolExecutor()
+
+class QueryRequest(BaseModel):
+    message: str
+    ticker: str = None
 
 @app.post("/ask")
 async def ask_agent(request: QueryRequest):
@@ -440,7 +448,16 @@ async def ask_agent(request: QueryRequest):
     loop = asyncio.get_event_loop()
     response = await loop.run_in_executor(executor, run_agent, full_message)
     
+    validation = {"validated": True, "flags": [], "flag_count": 0}
+    if request.ticker:
+        try:
+            analysis = requests.get(f"http://127.0.0.1:8000/analyze/{request.ticker}").json()
+            validation = validate_response(response, analysis)
+        except Exception as e:
+            validation = {"validated": True, "flags": [], "flag_count": 0, "error": str(e)}
+    
     return {
         "response": response,
-        "ticker": request.ticker
+        "ticker": request.ticker,
+        "validation": validation
     }

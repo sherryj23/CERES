@@ -70,7 +70,7 @@ graph.add_conditional_edges("agent", should_continue)
 graph.add_edge("tools", "agent")
 
 agent = graph.compile()
-
+import time 
 @traceable(name="ceres_agent")
 def run_agent(user_message: str) -> str:
     result = agent.invoke({
@@ -81,3 +81,26 @@ def run_agent(user_message: str) -> str:
 if __name__ == "__main__":
     response = run_agent("Analyze AAPL options and tell me what you find")
     print(response)
+
+    import time
+
+@traceable(name="ceres_agent")
+def run_agent(user_message: str) -> str:
+    max_retries = 3
+    retry_delay = 5
+    
+    for attempt in range(max_retries):
+        try:
+            result = agent.invoke({
+                "messages": [{"role": "user", "content": user_message}]
+            })
+            return result["messages"][-1].content
+        except Exception as e:
+            if "overloaded" in str(e).lower() and attempt < max_retries - 1:
+                print(f"API overloaded, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # exponential backoff
+            else:
+                raise e
+    
+    return "Unable to process request after multiple attempts. Please try again."

@@ -1,9 +1,14 @@
 import os
+import time
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
-from langgraph.graph import StateGraph, MessagesState
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.graph import StateGraph
 from langgraph.prebuilt import ToolNode
 from langsmith import traceable
+from typing import TypedDict, Annotated
+import operator
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from tools import (
     get_stock_price,
     get_options_analysis,
@@ -17,90 +22,150 @@ from tools import (
 
 load_dotenv()
 
-import os
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = "ceres"
 os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
 
-# initialize Claude
 llm = ChatAnthropic(
     model="claude-sonnet-4-6",
     api_key=os.getenv("ANTHROPIC_API_KEY")
 )
 
-SYSTEM_PROMPT = """
-You are Ceres, an AI-powered options analysis agent.
+llm_fallback = ChatGoogleGenerativeAI(
+    model="gemini-2.0-flash",
+    google_api_key=os.getenv("GOOGLE_API_KEY")
+)
 
-You have access to real live market data through your tools. You NEVER guess or make up numbers. 
-You ALWAYS use your tools to fetch real data before answering any question about a stock or options contract.
-
-When analyzing a ticker:
-1. Always fetch the options analysis first
-2. Always fetch the IV analysis to understand if options are cheap or expensive
-3. Always fetch volatility data for market sentiment
-4. Present findings clearly — what the data shows, not what you think
-
-You are helping traders understand the options market better. You do not tell them what to do.
-You present verified, data-backed analysis so they can make their own informed decisions.
-
-Always be clear about what the data shows vs what is interpretation.
-"""
-
-# bind tools to claude
 llm_with_tools = llm.bind_tools(TOOLS)
+llm_fallback_with_tools = llm_fallback.bind_tools(TOOLS)
 
-def agent_node(state: MessagesState):
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + state["messages"]
-    response = llm_with_tools.invoke(messages)
+class CeresState(TypedDict):
+    messages: Annotated[list[BaseMessage], operator.add]
+    ticker: str
+    quant_analysis: str
+    patterns: str
+    context: str
+    final_response: str
+
+def data_agent(state: CeresState):
+    system = """You are the Data Agent for Ceres. Your ONLY job is to fetch raw market data.
+    Use your tools to fetch options analysis, IV analysis, and volatility data.
+    Do not analyze or interpret. Just fetch the data."""
+    messages = [SystemMessage(content=system)] + state["messages"]
+    try:
+        response = llm_with_tools.invoke(messages)
+    except Exception:
+        print("Claude overloaded in data agent, falling back to Gemini...")
+        response = llm_fallback_with_tools.invoke(messages)
     return {"messages": [response]}
 
-def should_continue(state: MessagesState):
+def quant_agent(state: CeresState):
+    system = """You are the Quant Agent for Ceres. Perform quantitative analysis on the fetched data.
+    Focus on significant mispricings, IV vs HV comparison, Greeks for key contracts, and put/call ratio.
+    Be precise and data-driven."""
+    messages = [SystemMessage(content=system)] + state["messages"] + [HumanMessage(content="Perform quantitative analysis on the data fetched above.")]
+    try:
+        response = llm.invoke(messages)
+    except Exception:
+        response = llm_fallback.invoke(messages)
+    return {"messages": [response], "quant_analysis": response.content}
+
+def pattern_agent(state: CeresState):
+    system = """You are the Pattern Agent for Ceres. Identify patterns across all options contracts.
+    Look for systematic mispricing, unusual IV clustering, anomalies in Greeks, and put/call imbalances."""
+    messages = [SystemMessage(content=system)] + state["messages"] + [HumanMessage(content="Identify patterns in the analysis above.")]
+    try:
+        response = llm.invoke(messages)
+    except Exception:
+        response = llm_fallback.invoke(messages)
+    return {"messages": [response], "patterns": response.content}
+
+def context_agent(state: CeresState):
+    system = """You are the Context Agent for Ceres. Add market context to the analysis.
+    Explain why IV might be elevated, what put/call ratio indicates, and what mispricing patterns suggest."""
+    messages = [SystemMessage(content=system)] + state["messages"] + [HumanMessage(content="Add market context to the analysis above.")]
+    try:
+        response = llm.invoke(messages)
+    except Exception:
+        response = llm_fallback.invoke(messages)
+    return {"messages": [response], "context": response.content}
+
+def explainer_agent(state: CeresState):
+    system = """You are the Explainer Agent for Ceres. Synthesize everything into a clear final response.
+    Include: key metrics, important mispricing opportunities, patterns found, market context.
+    End with a disclaimer that this is data-driven analysis only."""
+    messages = [SystemMessage(content=system)] + state["messages"] + [HumanMessage(content="Synthesize everything into a final clear response.")]
+    try:
+        response = llm.invoke(messages)
+    except Exception:
+        response = llm_fallback.invoke(messages)
+    return {"messages": [response], "final_response": response.content}
+
+def should_continue(state: CeresState):
     last_message = state["messages"][-1]
-    if last_message.tool_calls:
+    if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
         return "tools"
-    return "end"
+    return "quant"
 
 tool_node = ToolNode(TOOLS)
 
-graph = StateGraph(MessagesState)
-graph.add_node("agent", agent_node)
+graph = StateGraph(CeresState)
+graph.add_node("data", data_agent)
 graph.add_node("tools", tool_node)
-graph.set_entry_point("agent")
-graph.add_conditional_edges("agent", should_continue)
-graph.add_edge("tools", "agent")
+graph.add_node("quant", quant_agent)
+graph.add_node("pattern", pattern_agent)
+graph.add_node("context", context_agent)
+graph.add_node("explainer", explainer_agent)
+
+graph.set_entry_point("data")
+graph.add_conditional_edges("data", should_continue)
+graph.add_edge("tools", "quant")
+graph.add_edge("quant", "pattern")
+graph.add_edge("pattern", "context")
+graph.add_edge("context", "explainer")
+graph.add_edge("explainer", "__end__")
 
 agent = graph.compile()
-import time 
-@traceable(name="ceres_agent")
-def run_agent(user_message: str) -> str:
-    result = agent.invoke({
-        "messages": [{"role": "user", "content": user_message}]
-    })
-    return result["messages"][-1].content
+
+@traceable(name="ceres_multi_agent")
+def run_agent(user_message: str, ticker: str = None) -> dict:
+    try:
+        result = agent.invoke({
+            "messages": [HumanMessage(content=user_message)],
+            "ticker": ticker or "",
+            "quant_analysis": "",
+            "patterns": "",
+            "context": "",
+            "final_response": ""
+        })
+        response = result["final_response"]
+
+    except Exception as e:
+        if "overloaded" in str(e).lower():
+            print("Claude overloaded, falling back to Gemini...")
+            fallback_response = llm_fallback.invoke([HumanMessage(content=user_message)])
+            response = fallback_response.content
+        else:
+            raise e
+
+    validation = {"validated": True, "flags": [], "flag_count": 0}
+    if ticker:
+        try:
+            import requests as req
+            import sys
+            sys.path.append(os.path.join(os.path.dirname(__file__)))
+            from validator import validate_response
+            analysis = req.get(f"http://127.0.0.1:8000/analyze/{ticker}").json()
+            validation = validate_response(response, analysis)
+        except Exception as e:
+            validation = {"validated": True, "flags": [], "flag_count": 0, "error": str(e)}
+
+    return {
+        "response": response,
+        "validation": validation,
+        "agents_used": ["data", "quant", "pattern", "context", "explainer"]
+    }
 
 if __name__ == "__main__":
-    response = run_agent("Analyze AAPL options and tell me what you find")
+    response = run_agent("Analyze AAPL options", ticker="AAPL")
     print(response)
-
-    import time
-
-@traceable(name="ceres_agent")
-def run_agent(user_message: str) -> str:
-    max_retries = 3
-    retry_delay = 5
-    
-    for attempt in range(max_retries):
-        try:
-            result = agent.invoke({
-                "messages": [{"role": "user", "content": user_message}]
-            })
-            return result["messages"][-1].content
-        except Exception as e:
-            if "overloaded" in str(e).lower() and attempt < max_retries - 1:
-                print(f"API overloaded, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(retry_delay)
-                retry_delay *= 2  # exponential backoff
-            else:
-                raise e
-    
-    return "Unable to process request after multiple attempts. Please try again."

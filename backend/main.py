@@ -430,7 +430,6 @@ from pydantic import BaseModel
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'agent'))
 from agent import run_agent
-from validator import validate_response
 
 executor = ThreadPoolExecutor()
 
@@ -438,26 +437,31 @@ class QueryRequest(BaseModel):
     message: str
     ticker: str = None
 
+import yfinance as yf
+
 @app.post("/ask")
 async def ask_agent(request: QueryRequest):
+    # validate ticker if provided
+    if request.ticker:
+        try:
+            stock = yf.Ticker(request.ticker)
+            info = stock.options
+            if not info:
+                return {"error": f"No options data found for ticker {request.ticker}. Please enter a valid US stock ticker."}
+        except Exception:
+            return {"error": f"Invalid ticker: {request.ticker}. Please enter a valid US stock ticker."}
+    
     if request.ticker:
         full_message = f"Ticker: {request.ticker}. {request.message}"
     else:
         full_message = request.message
     
     loop = asyncio.get_event_loop()
-    response = await loop.run_in_executor(executor, run_agent, full_message)
-    
-    validation = {"validated": True, "flags": [], "flag_count": 0}
-    if request.ticker:
-        try:
-            analysis = requests.get(f"http://127.0.0.1:8000/analyze/{request.ticker}").json()
-            validation = validate_response(response, analysis)
-        except Exception as e:
-            validation = {"validated": True, "flags": [], "flag_count": 0, "error": str(e)}
+    result = await loop.run_in_executor(executor, run_agent, full_message, request.ticker)
     
     return {
-        "response": response,
+        "response": result["response"],
         "ticker": request.ticker,
-        "validation": validation
+        "validation": result["validation"],
+        "agents_used": result["agents_used"]
     }

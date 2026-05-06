@@ -1,26 +1,10 @@
-from guardrails import Guard
-from guardrails.hub import ProvenanceEmbeddings
-
-def create_guard():
-    guard = Guard().use(
-        ProvenanceEmbeddings(
-            validation_method="sentence",
-            on_fail="noop"
-        )
-    )
-    return guard
+import re
 
 def validate_response(response: str, analysis_data: dict) -> dict:
-    """
-    Validates Claude's response against actual computed data
-    Uses both Guardrails AI and custom financial checks
-    """
     flags = []
     
-    # custom financial validation
     actual_price = analysis_data.get("current_price", None)
     if actual_price:
-        import re
         prices_mentioned = re.findall(r'\$(\d+\.?\d*)', response)
         for price in prices_mentioned:
             price_float = float(price)

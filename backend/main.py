@@ -415,3 +415,32 @@ def analyze_multiple(tickers: str):
             results[ticker] = {"error": str(e)}
     
     return results
+
+from pydantic import BaseModel
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'agent'))
+from agent import run_agent
+
+class QueryRequest(BaseModel):
+    message: str
+    ticker: str = None
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+executor = ThreadPoolExecutor()
+
+@app.post("/ask")
+async def ask_agent(request: QueryRequest):
+    if request.ticker:
+        full_message = f"Ticker: {request.ticker}. {request.message}"
+    else:
+        full_message = request.message
+    
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(executor, run_agent, full_message)
+    
+    return {
+        "response": response,
+        "ticker": request.ticker
+    }

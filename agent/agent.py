@@ -17,6 +17,11 @@ from tools import (
 
 load_dotenv()
 
+import os
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = "ceres"
+os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGSMITH_API_KEY")
+
 # initialize Claude
 llm = ChatAnthropic(
     model="claude-sonnet-4-6",

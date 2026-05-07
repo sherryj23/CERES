@@ -1,5 +1,6 @@
 import os
 import time
+from unittest import result
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -91,9 +92,22 @@ def context_agent(state: CeresState):
     return {"messages": [response], "context": response.content}
 
 def explainer_agent(state: CeresState):
-    system = """You are the Explainer Agent for Ceres. Synthesize everything into a clear final response.
-    Include: key metrics, important mispricing opportunities, patterns found, market context.
-    End with a disclaimer that this is data-driven analysis only."""
+    system = """You are the Explainer Agent for Ceres. Synthesize everything into a CONCISE structured JSON response.
+
+Return ONLY this exact JSON format, nothing else, no markdown, no backticks:
+{
+  "summary": "2-3 sentence market overview",
+  "key_metrics": {
+    "iv_signal": "one line",
+    "sentiment": "one line",
+    "mispricing_count": "X contracts mispriced"
+  },
+  "top_opportunities": [
+    {"contract": "$XXX CALL/PUT", "signal": "OVERPRICED/UNDERPRICED", "amount": "$X.XX", "note": "one line"}
+  ],
+  "risk_level": "LOW/MEDIUM/HIGH",
+  "disclaimer": "Data-driven analysis only. Not financial advice."
+}"""
     messages = [SystemMessage(content=system)] + state["messages"] + [HumanMessage(content="Synthesize everything into a final clear response.")]
     try:
         response = llm.invoke(messages)
@@ -138,8 +152,10 @@ def run_agent(user_message: str, ticker: str = None) -> dict:
             "context": "",
             "final_response": ""
         })
-        response = result["final_response"]
-
+        response = result.get("final_response", "")
+        print("=== FINAL RESPONSE ===", result.get("final_response", "EMPTY"))
+        print("=== LAST MSG ===", result["messages"][-1].content[:300])
+        
     except Exception as e:
         if "overloaded" in str(e).lower():
             print("Claude overloaded, falling back to Gemini...")

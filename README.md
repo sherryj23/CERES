@@ -98,7 +98,7 @@ A wide bid-ask spread means you lose money just getting in and out of the trade,
 ## Setup
 
 ```bash
-git clone https://github.com/sr3yo/ceres.git
+git clone https://github.com/username/ceres.git
 cd ceres
 pip install -r requirements.txt
 ```

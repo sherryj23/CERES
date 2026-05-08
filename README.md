@@ -58,7 +58,7 @@ The scanner runs the full pipeline across 20 tickers at the same time and filter
 
 ## Contract Quality Scoring
 
-Finding a mispriced contract does not mean you can actually trade it profitably. Ceres scores each contract for liquidity:
+Finding a mispriced  contract does not mean you can actually trade it profitably. Ceres scores each contract for liquidity:
 
 - **High**: bid-ask spread is less than 5% of the ask price, and open interest is above 100
 - **Medium**: spread under 15% and open interest above 10
